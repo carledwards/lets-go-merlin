@@ -1,0 +1,40 @@
+MIT License
+
+Copyright (c) 2026 carledwards
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+The MIT license above covers the original code in this repository only.
+Third-party and historical components are NOT covered by it:
+
+- roms/mp3404.bin — the Texas Instruments MP3404 mask ROM as used in
+  Parker Brothers Merlin (© 1978 Texas Instruments / Parker Brothers).
+  Included for emulation/preservation; it is the same dump MAME uses.
+  Copyright is retained by its owners; it is not licensed under MIT.
+- web/assets/merlin.png — Merlin faceplate artwork derived from Bob
+  Doyle's site theelectronicwizard.com. Used with attribution; rights
+  remain with the original author.
+- The TMS1100 interpreter descends from Dominic Thibodeau's
+  (hotkeysoft) C++ TMS1000-family emulator via carledwards/merlin-tms1100.
+- The Merlin R/O/K matrix mapping was read from MAME's hh_tms1k.cpp
+  (MAME is GPL-2.0); only the factual wiring was used, no MAME code.
+
+See README.md and docs/architecture.md for full credits.

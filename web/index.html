@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merlin — TMS1100 emulator (Go/WASM)</title>
+<style>
+  :root { --w:290px; --h:700px; }
+  html,body { margin:0; background:#0c0c0f; color:#cdd2d6;
+    font:14px/1.4 system-ui, sans-serif; }
+  body { min-height:100vh; display:flex; flex-direction:column;
+    align-items:center; gap:16px; padding:24px 12px 40px; }
+  h1 { font-size:13px; font-weight:600; letter-spacing:.12em;
+    opacity:.55; margin:0; }
+  #status { font-size:12px; opacity:.6; min-height:1.2em; text-align:center; }
+
+  /* The device: real emulator LEDs sit BEHIND the cut-out faceplate. */
+  #stage { position:relative; width:var(--w); height:var(--h);
+    user-select:none; -webkit-user-select:none; touch-action:none; }
+  #leds, #hits { position:absolute; inset:0; }
+  .faceplate { position:absolute; inset:0; width:var(--w); height:var(--h);
+    z-index:2; pointer-events:none; }
+
+  /* LED glow shining through a transparent hole in the faceplate. */
+  .led { position:absolute; z-index:1; border-radius:50%;
+    background:radial-gradient(circle,
+      #ff5a3a 0%, #ff2a14 38%, #b3140a 66%, #3a0805 100%);
+    opacity:.10; transition:opacity .035s linear, box-shadow .035s linear; }
+  .led.on { opacity:1;
+    box-shadow:0 0 10px 4px rgba(255,70,40,.9),
+               0 0 22px 10px rgba(255,50,25,.45); }
+
+  /* Transparent click targets over each pad (above the faceplate). */
+  .pad-hit { position:absolute; z-index:3; border-radius:50%;
+    cursor:pointer; background:transparent; }
+  /* Transparent click targets over the printed control buttons. */
+  .ctrl-hit { position:absolute; z-index:3; border-radius:8px;
+    cursor:pointer; background:transparent; }
+  .ctrl-hit:active { background:rgba(255,255,255,.06); }
+
+  /* Console: games/keys panel on the left, device centered. */
+  #console { display:flex; gap:28px; align-items:flex-start;
+    justify-content:center; flex-wrap:wrap; }
+  #device { display:flex; flex-direction:column; align-items:center;
+    gap:16px; }
+  #guide { width:210px; text-align:left; align-self:stretch;
+    background:#141418; border:1px solid #23232a; border-radius:12px;
+    padding:16px 18px; }
+  #guide h3 { font-size:11px; letter-spacing:.12em;
+    text-transform:uppercase; opacity:.5; margin:18px 0 8px; }
+  #guide h3:first-child { margin-top:0; }
+  #games { list-style:none; margin:0; padding:0; }
+  #games li { display:flex; align-items:center; gap:10px;
+    padding:7px 6px; margin:1px 0; font-size:13px; opacity:.85;
+    border:1px solid transparent; border-radius:7px; cursor:pointer;
+    transition:background .1s, opacity .1s; }
+  #games li + li { border-top:1px solid #1d1d22; }
+  #games li:hover, #games li:focus-visible { background:#23161a;
+    opacity:1; outline:none; border-color:#3a2024; }
+  #games li:active { background:#2c1a1f; }
+  #games li[aria-disabled="true"] { opacity:.4; cursor:default;
+    background:none; }
+  #games.busy li { cursor:progress; }
+  #games span { display:inline-flex; align-items:center;
+    justify-content:center; width:20px; height:20px; flex:none;
+    border-radius:50%; background:#2a1110; color:#ff6a4a;
+    font-size:11px; font-weight:700; }
+  .g-note { font-size:11px; opacity:.45; margin:8px 0 0; }
+  .g-note b { color:#cdd2d6; }
+  .keys { display:grid; grid-template-columns:auto 1fr;
+    gap:4px 12px; margin:0; font-size:12px; }
+  .keys dt { font-family:ui-monospace, Menlo, monospace;
+    color:#ff6a4a; opacity:.85; }
+  .keys dd { margin:0; opacity:.7; }
+
+  /* Console buttons: 2-column grid in the left panel. */
+  .ctrl-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px;
+    margin-top:8px; }
+  button { font:inherit; color:#e8eaed; background:#23232a;
+    border:1px solid #3c3c46; border-radius:9px; padding:9px 8px;
+    cursor:pointer; }
+  .ctrl-grid button { width:100%; font-size:12px; }
+  button:active { background:#32323c; }
+  /* Power: dark grey when off, green when on (toggle). */
+  #power { background:#33333b; border-color:#45454f; }
+  #power.on { background:#1f6f3f; border-color:#2c9457; }
+  #reset { background:#5a1f1f; border-color:#8a2a2a; }
+  @media (max-width:620px) {
+    #guide { width:290px; }
+  }
+
+  /* About / write-up */
+  #about { max-width:680px; margin-top:14px; padding:0 6px 8px;
+    border-top:1px solid #23232a; }
+  #about h2 { font-size:13px; letter-spacing:.1em; text-transform:uppercase;
+    opacity:.55; margin:30px 0 8px; }
+  #about p { margin:.55em 0; opacity:.82; }
+  #about a { color:#7fb6c8; }
+  #about .lede { font-size:15px; opacity:.9; }
+  #about strong { color:#e8eaed; }
+  .diagram { margin:16px 0 4px; }
+  .diagram svg { width:100%; height:auto; display:block; }
+  .diagram svg text { font-family:ui-monospace, SFMono-Regular, Menlo,
+    monospace; }
+  .diagram .d-ttl { fill:#cdd2d6; font-size:13px; }
+  .diagram .d-bdy { fill:#9aa3ab; font-size:12px; }
+  .diagram .d-mut { fill:#6f7681; font-size:11px; }
+  .diagram .d-acc { fill:#7fb6c8; font-size:11px; }
+  .diagram .apipe rect { fill:#191920; stroke:#34343d; }
+  .diagram .apipe text { fill:#9aa3ab; font-size:11px; }
+  .diagram figcaption, #about figcaption { font-size:11px; opacity:.5;
+    margin-top:8px; text-align:center; }
+  #about ul { padding-left:18px; opacity:.82; }
+  #about li { margin:.3em 0; }
+  #about .credit b { color:#cdd2d6; }
+  footer { font-size:11px; opacity:.4; margin-top:24px; text-align:center; }
+</style>
+</head>
+<body>
+  <h1>MERLIN — THE ELECTRONIC WIZARD</h1>
+  <div id="status">Loading WASM…</div>
+
+  <div id="console">
+    <aside id="guide">
+      <h3>Six games</h3>
+      <ol id="games">
+        <li data-game="1" tabindex="0" role="button"><span>1</span> Tic-Tac-Toe</li>
+        <li data-game="2" tabindex="0" role="button"><span>2</span> Music Machine</li>
+        <li data-game="3" tabindex="0" role="button"><span>3</span> Echo</li>
+        <li data-game="4" tabindex="0" role="button"><span>4</span> Blackjack 13</li>
+        <li data-game="5" tabindex="0" role="button"><span>5</span> Magic Square</li>
+        <li data-game="6" tabindex="0" role="button"><span>6</span> Mindbender</li>
+      </ol>
+      <p class="g-note">Click a game to deal it (does <b>New Game</b> →
+        number for you), or play manually below.</p>
+
+      <h3>Keys</h3>
+      <dl class="keys">
+        <dt>` </dt><dd>top pad</dd>
+        <dt>1–9</dt><dd>3×3 grid</dd>
+        <dt>0</dt><dd>bottom pad</dd>
+        <dt>N</dt><dd>New Game</dd>
+        <dt>S</dt><dd>Same Game</dd>
+        <dt>H</dt><dd>Hit Me</dd>
+        <dt>C</dt><dd>Comp Turn</dd>
+        <dt>R</dt><dd>Reset</dd>
+      </dl>
+      <p class="g-note">Or click the lit pads directly.</p>
+
+      <h3>Console</h3>
+      <div class="ctrl-grid">
+        <button id="power" type="button">⏻ Power On</button>
+        <button id="reset" type="button">Reset</button>
+        <button data-btn="11" type="button">New Game</button>
+        <button data-btn="12" type="button">Same Game</button>
+        <button data-btn="13" type="button">Hit Me</button>
+        <button data-btn="14" type="button">Comp Turn</button>
+      </div>
+    </aside>
+
+    <div id="device">
+      <div id="stage">
+        <div id="leds"></div>
+        <img class="faceplate" src="assets/merlin.png"
+             width="290" height="700" alt="Merlin faceplate">
+        <div id="hits"></div>
+      </div>
+    </div>
+  </div>
+
+  <article id="about">
+    <h2>What you're playing</h2>
+    <p class="lede">
+      This is the real <strong>Merlin</strong> — the red plastic handheld
+      from <strong>1978</strong>, made by <strong>Parker Brothers</strong>
+      and designed by <strong>Bob Doyle</strong>. Six games in one wand:
+      Tic-Tac-Toe, Music Machine, Echo, Blackjack 13, Magic Square and
+      Mindbender. Nothing here is a re-creation of those games. The
+      original program is running.
+    </p>
+
+    <h2>The chip</h2>
+    <p>
+      Merlin's brain is a Texas Instruments <strong>TMS1100</strong>
+      (mask part <strong>MP3404</strong>), a member of the
+      <strong>TMS1000 series</strong> — the line Texas Instruments
+      introduced in <strong>1974</strong> and one of the first
+      single-chip microcontrollers ever shipped. It grew directly out of
+      TI's early-1970s <em>calculator-on-a-chip</em> work: the silicon
+      that made pocket calculators cheap was generalized into a tiny
+      programmable computer.
+    </p>
+    <p>
+      That cheap little computer is what made the whole late-70s
+      electronic-toy boom possible. The same family powered Milton
+      Bradley's <strong>Simon</strong> and <strong>Big Trak</strong>,
+      TI's own calculators and <em>Speak &amp; Spell</em>, and a wave of
+      handheld games. Before it, "intelligence" in a toy meant custom
+      logic; after it, the intelligence was just <em>software</em> on a
+      part that cost pennies.
+    </p>
+
+    <h2>Why it was an extraordinary idea</h2>
+    <ul>
+      <li><strong>A whole computer on one die</strong> — CPU, program
+        ROM, data RAM and I/O together (Harvard architecture), at a time
+        when a "computer" was a board or a box.</li>
+      <li><strong>Mask ROM</strong> — the program is etched into the
+        silicon at the factory. Unchangeable, nearly free at volume. The
+        game <em>is</em> the chip. That's why running the original ROM
+        means something: it's the literal 1978 program.</li>
+      <li><strong>4-bit, ~350&nbsp;kHz, no crystal</strong> — a resistor
+        and capacitor set the clock (cost again), about 58,000
+        instructions a second.</li>
+      <li><strong>No interrupts, no timers, no DMA</strong>, a one-deep
+        call stack, and a program counter that counts in a scrambled
+        LFSR order to save transistors. Display multiplexing, button
+        scanning, sound, and game AI are <em>all</em> hand-timed software
+        loops.</li>
+    </ul>
+    <p>
+      The leap: computation became effectively free for consumer
+      products. Merlin isn't clever circuitry — it's a general-purpose
+      processor running a program. It quietly predicts the
+      microcontroller-in-everything world we live in now.
+    </p>
+
+    <h2>How this works</h2>
+    <p>
+      The TMS1100 is <strong>interpreted</strong> in Go: an instruction
+      decoder executes the unmodified original <strong>MP3404 ROM</strong>
+      (2&nbsp;KB, SHA1 <code>76ca36…0229</code> — the same dump MAME
+      uses). Every LED, tone and game behaviour <em>emerges</em> from
+      running that 1978 code one instruction at a time. The Go core is
+      compiled to <strong>WebAssembly</strong> and verified
+      bit-for-bit against a C++ reference across 200,000 instructions.
+    </p>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 462" role="img"
+        aria-label="Architecture: the browser JS front-end calls a Go/WebAssembly TMS1100 interpreter that executes the original MP3404 ROM; a separate pipeline resamples the speaker pin to the AudioWorklet.">
+        <defs>
+          <marker id="arr" viewBox="0 0 8 8" markerWidth="7"
+            markerHeight="7" refX="6" refY="4" orient="auto-start-reverse">
+            <path d="M0,0 L8,4 L0,8 z" fill="#5f6b73"/>
+          </marker>
+        </defs>
+
+        <rect x="4" y="4" width="712" height="454" rx="14"
+          fill="#101014" stroke="#24242b"/>
+        <text x="22" y="26" class="d-mut">Browser tab</text>
+
+        <!-- JS front-end -->
+        <rect x="20" y="36" width="680" height="84" rx="10"
+          fill="#15151b" stroke="#2b2b33"/>
+        <text x="36" y="61" class="d-ttl">index.html · main.js</text>
+        <text x="36" y="83" class="d-bdy">DOM — 11 LEDs glow behind the cut-out faceplate</text>
+        <text x="36" y="103" class="d-bdy">pointer / keyboard → button id</text>
+
+        <!-- JS ↔ WASM boundary -->
+        <line x1="140" y1="120" x2="140" y2="162" stroke="#5f6b73"
+          stroke-width="1.5" marker-start="url(#arr)" marker-end="url(#arr)"/>
+        <text x="156" y="137" class="d-acc">syscall/js</text>
+        <text x="156" y="152" class="d-mut">press/release ↓ · LED bytes ↑</text>
+
+        <!-- WASM: wrapper -->
+        <rect x="20" y="162" width="680" height="80" rx="10"
+          fill="#15151b" stroke="#2b2b33"/>
+        <text x="36" y="187" class="d-ttl">merlin.wasm
+          <tspan class="d-mut" dx="8">Go → WebAssembly</tspan></text>
+        <text x="36" y="211" class="d-bdy">merlin wrapper · matrix · LED decay · speaker tap</text>
+
+        <line x1="140" y1="242" x2="140" y2="284" stroke="#5f6b73"
+          stroke-width="1.5" marker-start="url(#arr)" marker-end="url(#arr)"/>
+        <text x="156" y="259" class="d-acc">SetK(buttons, O) ↓</text>
+        <text x="156" y="274" class="d-mut">R / O / K lines ↑</text>
+
+        <!-- WASM: CPU core -->
+        <rect x="20" y="284" width="680" height="76" rx="10"
+          fill="#15151b" stroke="#2b2b33"/>
+        <text x="36" y="309" class="d-ttl">tms1100 interpreter
+          <tspan class="d-bdy" dx="8">── executes ──▶  MP3404 ROM</tspan></text>
+        <text x="36" y="333" class="d-mut">original 1978 mask · SHA1 76ca36…0229 · bit-exact vs C++ ref</text>
+
+        <!-- speaker tap → audio pipeline -->
+        <line x1="70" y1="360" x2="70" y2="382" stroke="#5f6b73"
+          stroke-width="1.5" marker-end="url(#arr)"/>
+        <g class="apipe">
+          <rect x="20"  y="382" width="150" height="38" rx="8"/>
+          <text x="34"  y="406">speaker tap · O&amp;1</text>
+          <line x1="170" y1="401" x2="190" y2="401" stroke="#5f6b73"
+            stroke-width="1.5" marker-end="url(#arr)"/>
+          <rect x="192" y="382" width="176" height="38" rx="8"/>
+          <text x="206" y="406">resampler 58k → 48k</text>
+          <line x1="368" y1="401" x2="388" y2="401" stroke="#5f6b73"
+            stroke-width="1.5" marker-end="url(#arr)"/>
+          <rect x="390" y="382" width="128" height="38" rx="8"/>
+          <text x="404" y="406">postMessage()</text>
+          <line x1="518" y1="401" x2="538" y2="401" stroke="#5f6b73"
+            stroke-width="1.5" marker-end="url(#arr)"/>
+          <rect x="540" y="382" width="160" height="38" rx="8"/>
+          <text x="554" y="406">AudioWorklet → 🔊</text>
+        </g>
+      </svg>
+      <figcaption>Each animation frame, Go runs ≈ elapsed&nbsp;time × 58&nbsp;kHz instructions.</figcaption>
+    </figure>
+
+    <h2>The sound</h2>
+    <p>
+      Merlin has <strong>no sound chip</strong>. The ROM toggles a single
+      output pin inside timing loops; that pin drives a transistor and a
+      small speaker. The <em>pitch</em> is how fast the loop flips the
+      pin; the <em>rhythm</em> is how many times it loops. The music is
+      literally the processor stalling at audible frequencies (Merlin's
+      three-level volume is three outputs tied together).
+    </p>
+    <p>
+      So we don't synthesise notes or play samples. Every emulated
+      instruction we read that speaker pin and feed its 1-bit state into
+      a resampler that turns the ~58&nbsp;kHz stream into 44.1/48&nbsp;kHz
+      audio for the browser. Because the CPU timing is faithful, the
+      pitches and rhythms come out right on their own — and if you slow
+      the emulated clock, the tone sags exactly like a real Merlin on a
+      dying 9-volt.
+    </p>
+
+    <h2 class="credit">Credit where it's due</h2>
+    <ul class="credit">
+      <li><b>Bob Doyle</b> — designed Merlin (Parker Brothers, 1978).
+        The faceplate art here is derived from his site
+        <a href="https://www.theelectronicwizard.com/">theelectronicwizard.com</a>.</li>
+      <li><b>Dominic Thibodeau (hotkeysoft)</b> — the original C++
+        TMS1000-family emulator this lineage descends from.</li>
+      <li><b>Carl Edwards</b> — the C++/Python
+        <a href="https://github.com/carledwards/merlin-tms1100">merlin-tms1100</a>
+        port used as the bit-exact reference spec for this Go version.</li>
+      <li><b>The MAME team</b> — <code>hh_tms1k.cpp</code>: the definitive
+        Merlin matrix wiring and ROM identification.</li>
+      <li><b>Texas Instruments &amp; Parker Brothers</b> — the TMS1100 and
+        the MP3404 ROM (© 1978).</li>
+    </ul>
+  </article>
+
+  <footer>
+    TMS1100 interpreted in Go · WebAssembly · original MP3404 ROM
+  </footer>
+
+  <script src="wasm_exec.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+name: Deploy Merlin wasm to GitHub Pages
+
+# Rebuilds the wasm binary and publishes web/ to GitHub Pages whenever
+# something that affects the emulator changes. Manual re-runs also
+# possible via the Actions tab.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/merlinweb/**'
+      - 'pkg/**'
+      - 'roms/**'
+      - 'internal/**'
+      - 'web/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/workflows/wasm-pages.yml'
+  workflow_dispatch:
+
+# GitHub Pages deployment via Actions needs these scopes.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. cancel-in-progress=false means a queued
+# run that arrives mid-deploy waits its turn instead of aborting the
+# in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Opt JS-based actions into Node 24 ahead of the forced cutover in
+# June 2026. Suppresses the Node 20 deprecation warning on each run.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # go.mod requires Go 1.26; 'stable' tracks the latest released
+          # minor so we get >=1.26 automatically as it rolls out.
+          go-version: 'stable'
+          cache: true
+
+      - name: Build wasm
+        run: make wasm
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          # Auto-enable GitHub Pages on this repo if it isn't already.
+          # Requires pages:write scope (granted above). The workflow
+          # self-bootstraps — no manual click in Settings → Pages.
+          enablement: true
+
+      - name: Upload web/ as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy to Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

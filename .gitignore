@@ -1,0 +1,11 @@
+# The built WASM (web/merlin.wasm) and web/wasm_exec.js ARE committed —
+# same convention as carledwards/6502-sim-tui — so the repo is browsable
+# and GitHub Pages works even without a CI run. The wasm-pages workflow
+# rebuilds them fresh on deploy regardless.
+
+# OS / editor noise
+.DS_Store
+*.swp
+
+# Claude
+.claude/
