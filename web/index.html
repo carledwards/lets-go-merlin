@@ -4,6 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Merlin — TMS1100 emulator (Go/WASM)</title>
+
+<!-- Link-preview (Open Graph / Twitter). og:image MUST be an absolute
+     URL; update it if the Pages path ever changes. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Merlin — The Electronic Wizard (1978), emulated">
+<meta property="og:description" content="The original 1978 Parker Brothers Merlin ROM, running on a from-scratch TMS1100 interpreter — in your browser.">
+<meta property="og:url" content="https://carledwards.github.io/lets-go-merlin/">
+<meta property="og:image" content="https://carledwards.github.io/lets-go-merlin/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Merlin handheld game">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Merlin — The Electronic Wizard (1978), emulated">
+<meta name="twitter:description" content="The original 1978 Parker Brothers Merlin ROM, running on a from-scratch TMS1100 interpreter — in your browser.">
+<meta name="twitter:image" content="https://carledwards.github.io/lets-go-merlin/og.png">
 <style>
   :root { --w:290px; --h:700px; }
   html,body { margin:0; background:#0c0c0f; color:#cdd2d6;
@@ -97,6 +112,8 @@
   #about p { margin:.55em 0; opacity:.82; }
   #about a { color:#7fb6c8; }
   #about .lede { font-size:15px; opacity:.9; }
+  #about .personal { font-style:italic; opacity:.7;
+    border-left:2px solid #3a2024; padding-left:14px; margin:14px 0; }
   #about strong { color:#e8eaed; }
   .diagram { margin:16px 0 4px; }
   .diagram svg { width:100%; height:auto; display:block; }
@@ -171,12 +188,20 @@
   <article id="about">
     <h2>What you're playing</h2>
     <p class="lede">
-      This is the real <strong>Merlin</strong> — the red plastic handheld
-      from <strong>1978</strong>, made by <strong>Parker Brothers</strong>
-      and designed by <strong>Bob Doyle</strong>. Six games in one wand:
-      Tic-Tac-Toe, Music Machine, Echo, Blackjack 13, Magic Square and
-      Mindbender. Nothing here is a re-creation of those games. The
-      original program is running.
+      This page is running the original <strong>Merlin</strong> game
+      code. Merlin — the red plastic handheld from
+      <strong>1978</strong>, made by <strong>Parker Brothers</strong>
+      and designed by <strong>Bob Doyle</strong> — packs six games into
+      one wand: Tic-Tac-Toe, Music Machine, Echo, Blackjack 13, Magic
+      Square and Mindbender. None of them are re-implemented here; the
+      unmodified ROM is executing, exactly as it did on the original
+      chip.
+    </p>
+    <p class="personal">
+      I got a Merlin for Christmas 1978. I couldn't wait to play it —
+      and, like most of my toys, I couldn't wait to take it apart. This
+      is the same code that was inside the one I opened up, now running
+      in your browser.
     </p>
 
     <h2>The chip</h2>
