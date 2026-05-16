@@ -130,6 +130,13 @@
   #about ul { padding-left:18px; opacity:.82; }
   #about li { margin:.3em 0; }
   #about .credit b { color:#cdd2d6; }
+  #about code { font-family:ui-monospace, SFMono-Regular, Menlo,
+    monospace; font-size:.92em; color:#cdd2d6; background:#1c1c22;
+    padding:1px 5px; border-radius:4px; }
+  #about pre { background:#141418; border:1px solid #23232a;
+    border-radius:8px; padding:14px 16px; overflow:auto; }
+  #about pre code { background:none; padding:0; color:#a9c7d2;
+    font-size:12px; line-height:1.55; }
   footer { font-size:11px; opacity:.4; margin-top:24px; text-align:center; }
 </style>
 </head>
@@ -346,6 +353,32 @@
       pitches and rhythms come out right on their own — and if you slow
       the emulated clock, the tone sags exactly like a real Merlin on a
       dying 9-volt.
+    </p>
+
+    <h2>Drive it from the console</h2>
+    <p>
+      The whole device is scriptable. Open your browser's DevTools
+      console and talk to the global <code>merlin</code> object — handy
+      for demos, testing, or just poking at it:
+    </p>
+    <pre><code>await merlin.on()      // power on (init or resume)
+merlin.game(1)         // New Game → 1   (1–6 = the six games)
+merlin.tap(5)          // press + release a pad/button
+merlin.press(3)        // hold …
+merlin.release(3)      // … then let go
+merlin.reset()         // reset the device
+merlin.off()           // real power-off (cold start next time)
+merlin.speed(1.5)      // clock tuning, 0.1–4× (pitch follows)
+merlin.ids             // { pad0:0 … pad10:10, newGame:11, … }</code></pre>
+    <p>
+      Ids: <code>0–10</code> are the pads (<code>1</code>–<code>9</code>
+      the grid, <code>10</code> the bottom “0”, <code>0</code> the top
+      pad), then <code>11</code> New Game, <code>12</code> Same Game,
+      <code>13</code> Hit Me, <code>14</code> Comp Turn. The pads only
+      do something while a game is running — Merlin ignores the keypad
+      when idle, exactly like the real toy. And since a console call
+      isn't a user gesture, audio stays silent until you click the page
+      once; the LEDs and game logic run regardless.
     </p>
 
     <h2 class="credit">Credit where it's due</h2>

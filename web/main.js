@@ -233,3 +233,27 @@ gamesEl.querySelectorAll('li[data-game]').forEach((li) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGame(n); }
   });
 });
+
+// ---- Console remote-control API ----
+// Drive the device from DevTools, e.g.  await merlin.on();  merlin.game(1)
+// Note: a console call is not a user gesture — if you power on without
+// having clicked the page first, emulation + LEDs run but the
+// AudioContext stays suspended (silent) until a real click/key.
+window.merlin = {
+  on:      startConsole,                 // power on (init or resume)
+  off:     powerOff,                     // real power-off (cold reset)
+  power:   () => (running ? powerOff() : startConsole()),
+  isOn:    () => running,
+  reset:   () => window.merlinReset && window.merlinReset(),
+  press,                                 // press(id), held until release
+  release,                               // release(id)
+  tap,                                   // tap(id) — press + release
+  game:    selectGame,                   // game(1..6): New Game + number
+  speed:   (m) => window.merlinSpeed && window.merlinSpeed(m), // 0.1..4
+  ids: {
+    pad0: 0, pad1: 1, pad2: 2, pad3: 3, pad4: 4, pad5: 5,
+    pad6: 6, pad7: 7, pad8: 8, pad9: 9, pad10: 10,
+    newGame: 11, sameGame: 12, hitMe: 13, compTurn: 14,
+  },
+};
+console.log('merlin console API ready — try: await merlin.on(); merlin.game(1)');
