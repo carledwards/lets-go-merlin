@@ -9,3 +9,8 @@
 
 # Claude
 .claude/
+
+# Locally-built native binaries. The repo only commits the wasm output
+# (see top comment); `make mcp` and friends produce host-arch binaries
+# here that no other developer or CI step should pick up.
+/bin/

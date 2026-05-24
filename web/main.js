@@ -77,8 +77,14 @@ function waitFor(pred) {
 
 // ---- Audio + run loop ----
 const MAX_SAMPLES = 8192;              // must match maxSamplesPerPump in Go
-let audioCtx = null, node = null;
+let audioCtx = null, node = null, gain = null;
 let started = false;                   // one-time audio/init done
+// 0.6 = -40% (linear amplitude). The wasm emits samples at ±1.0 full
+// scale; that's loud on most speaker/headphone setups, especially the
+// idle DC + tone bursts. GainNode lives between the worklet and the
+// destination so this stays a pure post-mix attenuation — the audio
+// thread, the wasm, and the underrun-decay logic see no change.
+const DEFAULT_VOLUME = 0.6;
 let running = false;                   // powered on (loop active)
 let leds = null, audioRaw = null, audioF32 = null;
 
@@ -97,7 +103,10 @@ async function initOnce() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   await audioCtx.audioWorklet.addModule('worklet.js');
   node = new AudioWorkletNode(audioCtx, 'merlin-processor', { outputChannelCount: [1] });
-  node.connect(audioCtx.destination);
+  gain = audioCtx.createGain();
+  gain.gain.value = DEFAULT_VOLUME;
+  node.connect(gain);
+  gain.connect(audioCtx.destination);
 
   leds = new Uint8Array(11);
   audioRaw = new Uint8Array(MAX_SAMPLES * 4);
@@ -130,6 +139,7 @@ async function powerOff() {
   for (const el of ledEls) el.classList.remove('on'); // device goes dark
   if (window.merlinReset) window.merlinReset();        // back to power-on
   if (node) node.port.postMessage({ flush: true });    // drop queued samples
+  clearGameStarted();
   setStatus('Powered off.');
   try { await audioCtx.suspend(); } catch (e) { /* ignore */ }
 }
@@ -142,16 +152,111 @@ powerBtn.addEventListener('click', async () => {
   finally { powering = false; }
 });
 
+// Audio backlog suppression. Tabs that get backgrounded see rAF
+// throttle to ~1 Hz; when they return, merlinPump emits its full
+// backlog (capped at MAX_SAMPLES = 8192, ~170 ms) in one call. Playing
+// that compressed burst is the "fast-forward pulse." We still pump it
+// (so the Machine's clock advances correctly) but skip posting the
+// audio. The worklet's existing decay-on-underrun then gently fades
+// the held sample toward 0 over ~200 ms while we're skipping; once
+// rAF is steady again we post normal-sized chunks and the worklet's
+// pre-roll + fade-in logic re-engages cleanly. No flush, no click.
+//
+// Two thresholds, OR'd:
+//   MAX_FRAME_DT_MS = 100   — well above a steady frame (16 ms @ 60 Hz,
+//                              33 ms @ 30 Hz); catches tab-return gaps.
+//   STALE_BATCH     = 2000  — guards the case where rAF dt looks fine
+//                              but the wasm pump's internal clock saw a
+//                              gap (e.g. first frame after Power On or
+//                              after the visibility-return baseline reset).
+//
+// Audio path debug counters — always tallying (cheap), printable on
+// demand. Toggle live-logging from DevTools:
+//   merlin.audioDebug(true)   // console.log every stale frame
+//   merlin.audioStats()       // dump current totals
+// Useful when you hear a pulse: stats tell you whether it was stale-
+// by-dt (tab return), stale-by-batch (wasm pump catch-up), or neither
+// (likely the toy's own button-press tone — the ROM responding, not
+// an audio-path glitch).
+const audioStats = {
+  frames:        0, // total rAF frames where we pumped
+  posted:        0, // frames where audio was actually posted
+  staleByDt:     0, // frames suppressed because dt > MAX_FRAME_DT_MS
+  staleByBatch:  0, // frames suppressed because n > STALE_BATCH
+  maxDt:         0,
+  maxN:          0,
+  lastStaleAt:   0,
+  lastStaleDt:   0,
+  lastStaleN:    0,
+};
+let audioDebugLog = false;
+
+const MAX_FRAME_DT_MS = 100;
+// A normal rAF tick at 60 Hz produces ~768 samples @ 48 kHz; at 30 Hz
+// ~1600. Anything past 2000 means the pump's internal clock saw a
+// gap, even if rAF's dt looked OK (e.g. the first frame after
+// AudioContext.resume or after a visibility-return baseline reset).
+// Treat oversize batches as stale too.
+const STALE_BATCH = 2000;
+let lastFrameNow = 0;
+
 function frame(now) {
   if (!running) return;
+  const dt = lastFrameNow ? now - lastFrameNow : 0;
+  lastFrameNow = now;
+
   const n = window.merlinPump(now);
-  if (n > 0) node.port.postMessage(audioF32.slice(0, n)); // copy; buffer reused
+  audioStats.frames++;
+  if (dt > audioStats.maxDt) audioStats.maxDt = dt;
+  if (n  > audioStats.maxN)  audioStats.maxN  = n;
+  const staleDt    = dt > MAX_FRAME_DT_MS;
+  const staleBatch = n  > STALE_BATCH;
+  if (staleDt || staleBatch) {
+    // Long gap (tab return, GC pause, MCP-induced stall). Drop the
+    // backlog — playing seconds of compressed audio is the "fast-
+    // forward pulse." We deliberately do NOT send {flush:true} here:
+    // flush snaps the worklet's `last` value to 0, which the speaker
+    // hears as a step change = audible click. Instead, we simply stop
+    // feeding; the worklet's existing decay-on-underrun gently fades
+    // the held sample toward 0 over ~200 ms (0.9994/sample), then
+    // re-arms with a smooth fade-in once we start posting again.
+    if (staleDt)    audioStats.staleByDt++;
+    if (staleBatch) audioStats.staleByBatch++;
+    audioStats.lastStaleAt = now;
+    audioStats.lastStaleDt = dt;
+    audioStats.lastStaleN  = n;
+    if (audioDebugLog) {
+      console.log('merlin audio: stale frame  dt=%dms  n=%d  (byDt=%s byBatch=%s)',
+        Math.round(dt), n, staleDt, staleBatch);
+    }
+  } else if (n > 0) {
+    audioStats.posted++;
+    node.port.postMessage(audioF32.slice(0, n)); // copy; buffer reused
+  }
   for (let i = 0; i < 11; i++) ledEls[i].classList.toggle('on', leds[i] !== 0);
   requestAnimationFrame(frame);
 }
 
+// Visibility hook: only resets the dt baseline on return so the first
+// post-return frame doesn't see "5 seconds since last rAF" and
+// over-trigger the stale path on a normal pump. We deliberately do
+// NOT flush on hidden: rAF will throttle, our stale check will catch
+// the catch-up burst, and the worklet's underrun decay handles the
+// rest — silently. Flushing would just add a click on tab exit.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    lastFrameNow = 0;
+  }
+});
+
 // ---- Input wiring ----
-function press(id)   { if (window.merlinPress) window.merlinPress(id); }
+// NEW GAME (id 11) drops the toy into select-mode; whatever game was
+// running is no longer current. Clear last_game so the MCP snapshot
+// doesn't lie. selectGame() / opGame() re-set it after the digit tap.
+function press(id)   {
+  if (id === 11) clearGameStarted();
+  if (window.merlinPress) window.merlinPress(id);
+}
 function release(id) { if (window.merlinRelease) window.merlinRelease(id); }
 
 document.querySelectorAll('[data-btn]').forEach((el) => {
@@ -167,6 +272,7 @@ document.querySelectorAll('[data-btn]').forEach((el) => {
 
 document.getElementById('reset').addEventListener('click', () => {
   if (window.merlinReset) window.merlinReset();
+  clearGameStarted();
 });
 
 // Keyboard: ` top pad, 1-9 grid, 0 bottom, N/S/H/C game, R reset.
@@ -178,7 +284,7 @@ const KEYMAP = {
 const pressedKeys = new Set();
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
-  if (k === 'r') { if (window.merlinReset) window.merlinReset(); return; }
+  if (k === 'r') { if (window.merlinReset) window.merlinReset(); clearGameStarted(); return; }
   if (k in KEYMAP && !pressedKeys.has(k)) { pressedKeys.add(k); press(KEYMAP[k]); }
 });
 window.addEventListener('keyup', (e) => {
@@ -201,6 +307,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let selecting = false;
 const gamesEl = document.getElementById('games');
 
+// Last-dealt game tracker. Set whenever NEW GAME + digit is driven
+// through selectGame() or the MCP `game` op; cleared on reset and
+// power-off so the MCP snapshot doesn't lie after a cold restart.
+// Null means "I don't know" — useful signal: AI joining mid-session
+// can ask the human instead of guessing from LEDs.
+let lastGameStarted = null;
+function markGameStarted(n) {
+  lastGameStarted = { n, name: GAME_NAMES[n] || ('Game ' + n), startedAt: Date.now() };
+}
+function clearGameStarted() { lastGameStarted = null; }
+
 async function tap(id) {
   press(id);
   await sleep(TAP_MS);
@@ -220,6 +337,7 @@ async function selectGame(n) {
     setStatus(`Dealing ${GAME_NAMES[n]} — pressing ${n}…`);
     await tap(n);
     setStatus(`${GAME_NAMES[n]} — go!`);
+    markGameStarted(n);
   } finally {
     selecting = false;
     gamesEl.classList.remove('busy');
@@ -255,5 +373,219 @@ window.merlin = {
     pad6: 6, pad7: 7, pad8: 8, pad9: 9, pad10: 10,
     newGame: 11, sameGame: 12, hitMe: 13, compTurn: 14,
   },
+  // Audio-path diagnostics. Counters tally every frame regardless;
+  // setting audioDebug(true) also prints each stale frame to console
+  // so you can see the timestamp of every suppression event.
+  audioDebug: (on) => { audioDebugLog = !!on; return audioDebugLog; },
+  audioStats: () => ({ ...audioStats }),
+  audioReset: () => {
+    for (const k of Object.keys(audioStats)) audioStats[k] = 0;
+  },
+  // Volume control: 0.0..1.0, post-mix attenuation.
+  //   merlin.volume()    → read current value
+  //   merlin.volume(0.5) → set, returns clamped new value
+  // The setter uses setTargetAtTime (not direct .value =) so the
+  // change schedules a 10 ms ramp instead of a click on the speaker.
+  volume: (v) => {
+    if (!gain) return null;
+    if (v === undefined) return gain.gain.value;
+    const clamped = Math.max(0, Math.min(1, Number(v)));
+    gain.gain.setTargetAtTime(clamped, audioCtx.currentTime, 0.01);
+    return clamped;
+  },
 };
 console.log('merlin console API ready — try: await merlin.on(); merlin.game(1)');
+
+// ---- Volume slider wiring ----
+// The slider tracks 0..100 (whole percents) to match what humans
+// expect from a "volume" control; we translate to 0..1 amplitude
+// for the GainNode. We deliberately initialize the slider's UI to
+// DEFAULT_VOLUME so the displayed value matches the GainNode's
+// initial value the first time Power On creates the audio chain —
+// no "the slider says 60% but the actual gain is something else"
+// drift on first interaction.
+(function () {
+  const slider = document.getElementById('volume');
+  const label  = document.getElementById('volume-value');
+  if (!slider || !label) return;
+
+  // Sync HTML default to the JS constant so they can't get out of step.
+  const initPct = Math.round(DEFAULT_VOLUME * 100);
+  slider.value = String(initPct);
+  label.textContent = initPct + '%';
+
+  slider.addEventListener('input', () => {
+    const pct = parseInt(slider.value, 10);
+    label.textContent = pct + '%';
+    // window.merlin.volume() handles the case where the GainNode
+    // hasn't been created yet (Power not pressed) — returns null and
+    // the slider just stores the user's intent until Power On.
+    window.merlin.volume(pct / 100);
+  });
+
+  // First time Power On creates the audio chain, the slider's value
+  // was set before the GainNode existed — push it through so the
+  // GainNode starts at the slider position (in case the user moved
+  // the slider before pressing Power On).
+  const origOn = window.merlin.on;
+  window.merlin.on = async function () {
+    const ok = await origOn();
+    if (ok) window.merlin.volume(parseInt(slider.value, 10) / 100);
+    return ok;
+  };
+})();
+
+// ---- Optional MCP bridge (WebSocket → broker → MCP host) ----
+// The page tries to open a WebSocket to <same origin>/ws on boot. If
+// nothing is on the other end (typical GitHub Pages deploy, or no
+// merlin-mcp running locally) the open fails silently and the page
+// just plays solo — no change in behavior. If the broker IS running,
+// inbound JSON commands are dispatched to the same window.merlin API
+// the human uses, and replies carry the LED state back.
+//
+// Wire protocol (each frame is one JSON object on the WS):
+//   server → browser:  { id, op: "tap"|"read"|"reset"|"game", args }
+//   browser → server:  { id, result: { leds: bool[11], ... } }
+//                  or  { id, error: "..." }
+(function () {
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${scheme}//${location.host}/ws`;
+
+  // Tiny visible badge in the corner so the human knows when an MCP
+  // client is wired in. Only shown once the WS connects — never
+  // appears on GitHub Pages or other no-broker deploys.
+  let badge = null;
+  function ensureBadge() {
+    if (badge) return badge;
+    badge = document.createElement('div');
+    badge.id = 'mcp-badge';
+    badge.style.cssText =
+      'position:fixed;right:8px;top:8px;padding:4px 8px;border-radius:6px;' +
+      'font:11px ui-monospace,monospace;background:#1a3a1a;color:#9f9;' +
+      'border:1px solid #2f5;z-index:9999;opacity:.85';
+    badge.textContent = 'MCP connected';
+    document.body.appendChild(badge);
+    return badge;
+  }
+  function dropBadge() {
+    if (badge) { badge.remove(); badge = null; }
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Op handlers — every one returns the current LED snapshot so the
+  // MCP client always gets fresh state back without a follow-up read.
+  async function snapshot() {
+    // leds is the live Uint8Array shared with the wasm pump; copy by
+    // value into a plain bool[] so JSON.stringify is stable.
+    const arr = [];
+    if (leds) {
+      for (let i = 0; i < 11; i++) arr.push(leds[i] !== 0);
+    } else {
+      for (let i = 0; i < 11; i++) arr.push(false);
+    }
+    // last_game is best-effort: it reflects the most recent game
+    // dealt through selectGame() or the MCP `game` op. null means
+    // "unknown" (AI joined mid-session, or never started one) — a
+    // more honest signal than guessing from LEDs.
+    const lg = lastGameStarted
+      ? { n: lastGameStarted.n,
+          name: lastGameStarted.name,
+          ms_ago: Date.now() - lastGameStarted.startedAt }
+      : null;
+    return { leds: arr, powered: running, last_game: lg };
+  }
+
+  async function ensureRunning() {
+    if (!running) {
+      // No user gesture context here, so AudioContext.resume() will
+      // be a no-op (silent), but emulation + LEDs run normally —
+      // which is all the MCP client cares about.
+      await window.merlin.on();
+    }
+  }
+
+  async function opTap(args) {
+    await ensureRunning();
+    const id = args && Number.isInteger(args.id) ? args.id : -1;
+    if (id < 0 || id > 14) throw new Error('tap: bad button id ' + id);
+    const holdMs = (args && Number(args.hold_ms)) || 170;
+    press(id);
+    await sleep(holdMs);
+    release(id);
+    await sleep(150); // ROM settle window
+    return await snapshot();
+  }
+
+  async function opRead() {
+    return await snapshot();
+  }
+
+  async function opReset() {
+    await ensureRunning();
+    if (window.merlinReset) window.merlinReset();
+    clearGameStarted();
+    await sleep(150);
+    return await snapshot();
+  }
+
+  async function opGame(args) {
+    await ensureRunning();
+    const n = args && Number.isInteger(args.n) ? args.n : -1;
+    if (n < 1 || n > 6) throw new Error('game: n must be 1..6');
+    // Mirror the local selectGame() timing — NEW GAME, settle, then digit.
+    await window.merlin.tap(11);     // newgame
+    await sleep(950);
+    await window.merlin.tap(n);
+    await sleep(200);
+    markGameStarted(n);
+    return await snapshot();
+  }
+
+  const OPS = { tap: opTap, read: opRead, reset: opReset, game: opGame };
+
+  // Reconnect loop with capped exponential backoff. Silent if the
+  // server is missing — only the console gets a one-time note.
+  let backoff = 500;
+  let everConnected = false;
+  function connect() {
+    let ws;
+    try { ws = new WebSocket(url); }
+    catch (e) { schedule(); return; }
+
+    ws.addEventListener('open', () => {
+      backoff = 500;
+      everConnected = true;
+      console.log('merlin: MCP broker connected at', url);
+      ensureBadge();
+    });
+    ws.addEventListener('message', async (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); }
+      catch { return; }
+      const { id, op, args } = msg;
+      const handler = OPS[op];
+      if (!handler) {
+        ws.send(JSON.stringify({ id, error: 'unknown op: ' + op }));
+        return;
+      }
+      try {
+        const result = await handler(args || {});
+        ws.send(JSON.stringify({ id, result }));
+      } catch (e) {
+        ws.send(JSON.stringify({ id, error: String(e && e.message || e) }));
+      }
+    });
+    ws.addEventListener('close', () => { dropBadge(); schedule(); });
+    ws.addEventListener('error', () => { /* close fires next; let it retry */ });
+  }
+  function schedule() {
+    // Only log the very first failure — after that, retries are silent.
+    if (!everConnected && backoff === 500) {
+      console.log('merlin: no MCP broker on', url, '(playing solo)');
+    }
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 10_000);
+  }
+  connect();
+})();

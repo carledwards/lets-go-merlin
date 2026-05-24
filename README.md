@@ -24,25 +24,6 @@ Press **Power On**, then click a game in the side panel (it does
 *New Game → number* for you), or play the device directly — the 11 lit
 pads and the New/Same/Hit/Comp buttons on the faceplate are all live.
 
-## Quickstart
-
-```bash
-make test     # full suite incl. the 5000-line CPU golden trace
-make serve    # build wasm + serve at http://localhost:8080
-make cli      # watch the matrix scan in the terminal
-```
-
-## Browser build / GitHub Pages
-
-```bash
-make wasm     # builds web/merlin.wasm (+ copies wasm_exec.js)
-```
-
-`web/` is a self-contained static site (no SharedArrayBuffer, no
-COOP/COEP). `.github/workflows/wasm-pages.yml` rebuilds the wasm and
-deploys `web/` to GitHub Pages on every push to `main`; it self-enables
-Pages on first run.
-
 ## How it works
 
 Short version: a pure TMS1100 interpreter (`pkg/tms1100`) executes the
@@ -58,6 +39,7 @@ decision and the verification method: **[docs/architecture.md](docs/architecture
 cmd/merlinweb     Go→WASM browser front-end (syscall/js)
 cmd/merlincli     CLI: instruction trace / matrix-scan view
 cmd/merlinserve   tiny static server (correct .wasm MIME)
+cmd/merlin-mcp    local daemon: page + WebSocket broker + HTTP MCP
 pkg/tms1100       pure TMS1100 interpreter (no I/O, no deps)
 pkg/merlin        Merlin wrapper: matrix, LED decay, speaker
 pkg/audio         1-bit speaker → PCM resampler
@@ -67,14 +49,123 @@ internal/tools    ledscan / btnscan — derive UI coords from the art
 docs              architecture.md + images
 ```
 
-## Verification
+## Quickstart
 
-`pkg/tms1100` is diffed instruction-for-instruction against the C++
-reference (`carledwards/merlin-tms1100`): **200,000 / 200,000
-byte-identical**. `make ref-verify` re-runs the live diff (needs
-`clang++`); a CI-safe golden trace is checked into
+### Run the web locally
+
+```bash
+make serve
+# build web/merlin.wasm and serve at http://localhost:8080
+```
+
+`web/` is a self-contained static site (no SharedArrayBuffer, no
+COOP/COEP). The GitHub Pages workflow at
+`.github/workflows/wasm-pages.yml` rebuilds the wasm and deploys `web/`
+to Pages on every push to `main`.
+
+#### Interact with Merlin from the console
+
+Open your browser's DevTools console and talk to the global `merlin`
+object — handy for demos, testing, or just poking at it:
+
+```js
+await merlin.on()          // power on (init or resume)
+merlin.game(1)             // New Game → 1   (1–6 = the six games)
+merlin.tap(5)              // press + release a pad/button
+merlin.press(3)            // hold …
+merlin.release(3)          // … then let go
+merlin.reset()             // reset the device
+merlin.off()               // real power-off (cold start next time)
+merlin.speed(1.5)          // clock tuning, 0.1–4× (pitch follows)
+merlin.volume(0.4)         // 0..1, post-mix attenuation
+merlin.ids                 // { pad0:0 … pad10:10, newGame:11, … }
+```
+
+Ids: `0–10` are the pads (`1`–`9` the grid, `10` the bottom “0”, `0`
+the top pad), then `11` New Game, `12` Same Game, `13` Hit Me, `14`
+Comp Turn.
+
+### Control Merlin from your AI agent (e.g. Claude)
+
+The same page can host an **MCP endpoint** so Claude, a custom script,
+or anything that speaks MCP can press buttons and read the LEDs on the
+same Merlin you're looking at. The Merlin Machine still lives in the
+browser; `cmd/merlin-mcp` is a stateless **broker** — every MCP tool
+call hops over a WebSocket to the open page, which presses the actual
+buttons and reads the actual LEDs.
+
+Only switches on when the page and the broker are both running on your
+machine. The hosted GitHub Pages build has no broker to talk to and
+plays solo, silently.
+
+```bash
+make mcp                          # build bin/merlin-mcp
+./bin/merlin-mcp                  # daemon on localhost:8766
+# open http://localhost:8766/  →  green "MCP connected" badge appears
+
+# point Claude Code at the daemon (one-time):
+claude mcp add --transport http merlin http://localhost:8766/mcp
+
+# remove the registration when you're done playing:
+claude mcp remove merlin
+```
+
+Stop the daemon (Ctrl-C) and the AI tools simply stop working — no
+auto-spawn, no resident child process. The page keeps playing solo.
+`claude mcp remove merlin` only deletes Claude's pointer to the
+daemon; the binary and source stay where they are, ready for next time.
+
+Tools the AI gets:
+
+| Tool   | What it does                                                  |
+|--------|---------------------------------------------------------------|
+| `tap`  | Press + release a named button (`pad0`..`pad10`, `newgame`, `samegame`, `hitme`, `compturn`). Returns the LED state after the press settles. |
+| `read` | Current LED state + `last_game` hint (which game was most recently dealt, or `null` if unknown). |
+| `reset`| Hardware reset — re-runs the startup light show. |
+| `game` | Start a built-in game (1=Tic-Tac-Toe through 6=Mindbender). |
+
+Things to ask Claude once it's wired up:
+
+```
+Start tic-tac-toe and tell me which lights are on.
+Play a game of Echo against me — I'll go first.
+Reset the machine, deal Mindbender, then read the lights every
+few seconds and narrate what Merlin is showing me.
+```
+
+## Build / test commands
+
+```bash
+make test     # full suite incl. the 5000-line CPU golden trace
+make cli      # watch the matrix scan in the terminal
+make wasm     # build web/merlin.wasm (alias for the Pages build)
+make mcp      # build bin/merlin-mcp (the local broker daemon)
+make clean    # remove generated artifacts
+```
+
+## TMS1100 simulation & verification
+
+`pkg/tms1100` is a pure-Go interpreter for the chip family — no I/O,
+no host hooks, no dependencies. It's diffed instruction-for-instruction
+against the C++ reference (`carledwards/merlin-tms1100`):
+**200,000 / 200,000 byte-identical**. `make ref-verify` re-runs the
+live diff (needs `clang++`); a CI-safe golden trace is checked into
 `pkg/tms1100/testdata`. `go test ./...` covers the core, the matrix
 wrapper and the resampler.
+
+What's interesting about the TMS1100 itself:
+
+- **4-bit, ~350 kHz, no crystal.** A resistor and capacitor set the
+  clock — about 58,000 instructions per second.
+- **One-deep call stack**, no interrupts, no timers, no DMA. Display
+  multiplexing, button scanning, sound, and game AI are *all* hand-
+  timed software loops.
+- **Program counter counts in a scrambled LFSR order** to save
+  transistors. The interpreter applies the same scramble so PC values
+  match the original silicon exactly.
+- **Mask ROM** — the program is etched into the chip at the factory.
+  Unchangeable, nearly free at volume. The game *is* the chip; the 2 KB
+  in `roms/mp3404.bin` is that exact mask.
 
 ## Credits & provenance
 

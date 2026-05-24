@@ -100,6 +100,33 @@
   #power { background:#33333b; border-color:#45454f; }
   #power.on { background:#1f6f3f; border-color:#2c9457; }
   #reset { background:#5a1f1f; border-color:#8a2a2a; }
+
+  /* Volume slider — sits below the ctrl-grid in the same left panel.
+     Dark trough with a light thumb so it reads "audio dial" rather
+     than "form input." Width tracks the ctrl-grid so the panel reads
+     as one column block. */
+  #volume-row { display:flex; align-items:center; gap:8px;
+    margin-top:10px; font-size:12px; color:#cfcfd6; }
+  #volume-row label { opacity:.75; min-width:42px; }
+  #volume-row #volume-value { font-variant-numeric:tabular-nums;
+    opacity:.55; min-width:32px; text-align:right; }
+  input[type="range"]#volume {
+    flex:1; appearance:none; -webkit-appearance:none;
+    height:4px; background:#2a2a32; border:1px solid #3c3c46;
+    border-radius:3px; outline:none; cursor:pointer; margin:0;
+  }
+  input[type="range"]#volume::-webkit-slider-thumb {
+    -webkit-appearance:none; appearance:none;
+    width:14px; height:14px; border-radius:50%;
+    background:#cfcfd6; border:1px solid #45454f;
+    cursor:pointer;
+  }
+  input[type="range"]#volume::-moz-range-thumb {
+    width:14px; height:14px; border-radius:50%;
+    background:#cfcfd6; border:1px solid #45454f;
+    cursor:pointer;
+  }
+
   @media (max-width:620px) {
     #guide { width:290px; }
   }
@@ -115,6 +142,22 @@
   #about .personal { font-style:italic; opacity:.7;
     border-left:2px solid #3a2024; padding-left:14px; margin:14px 0; }
   #about strong { color:#e8eaed; }
+
+  /* AI pitch — a distinctive section so it reads as "new feature"
+     rather than just another paragraph. Subtle teal accent (matches
+     #7fb6c8 link color) keeps it on-brand with the rest of the dark
+     palette. Stays plain on print / no-JS / GitHub-Pages-no-broker —
+     the section is content, not behavior. */
+  #ai-pitch { margin:34px 0 6px; padding:18px 18px 14px;
+    background:linear-gradient(180deg,#0f1c20 0%,#0c1417 100%);
+    border:1px solid #2a4750; border-radius:10px;
+    box-shadow:0 1px 0 rgba(255,255,255,0.02) inset; }
+  #ai-pitch .ai-headline { margin:0 0 8px; font-size:19px;
+    letter-spacing:0; text-transform:none; color:#e8eaed;
+    opacity:1; line-height:1.3; }
+  #ai-pitch p { margin:.55em 0; opacity:.82; }
+  #ai-pitch .ai-note { font-size:13px; opacity:.65;
+    margin:0 0 .6em; }
   .diagram { margin:16px 0 4px; }
   .diagram svg { width:100%; height:auto; display:block; }
   .diagram svg text { font-family:ui-monospace, SFMono-Regular, Menlo,
@@ -179,6 +222,12 @@
         <button data-btn="12" type="button">Same Game</button>
         <button data-btn="13" type="button">Hit Me</button>
         <button data-btn="14" type="button">Comp Turn</button>
+      </div>
+
+      <div id="volume-row">
+        <label for="volume">Volume</label>
+        <input id="volume" type="range" min="0" max="100" value="60" step="1">
+        <span id="volume-value">60%</span>
       </div>
     </aside>
 
@@ -380,6 +429,19 @@ merlin.ids             // { pad0:0 … pad10:10, newGame:11, … }</code></pre>
       isn't a user gesture, audio stays silent until you click the page
       once; the LEDs and game logic run regardless.
     </p>
+
+    <section id="ai-pitch">
+      <h2 class="ai-headline">Another way to interact with Merlin: Claude &rarr; MCP &rarr; Merlin</h2>
+      <p class="ai-note">(this works only when you're running the MCP server on your local machine)</p>
+      <p>
+        Follow the directions here:
+        <a href="https://github.com/carledwards/lets-go-merlin#control-merlin-from-your-ai-agent-eg-claude">github.com/carledwards/lets-go-merlin</a>
+      </p>
+      <p>
+        This allows remote scripting of the Merlin game, just like the
+        console commands above.
+      </p>
+    </section>
 
     <h2 class="credit">Credit where it's due</h2>
     <ul class="credit">
